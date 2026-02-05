@@ -1,0 +1,9 @@
+{
+  "base-sepolia": {
+    "network": "base-sepolia",
+    "contractAddress": "0x21E95B92a07B00e7f410Ba170aE17763971D9F60",
+    "usdcAddress": "0x036cbd518a9b53f10a5a46d2f77b6e17b4c0fa8b",
+    "deploymentTime": "2026-02-05T17:37:18.761Z",
+    "deployer": "0xc4A5a9Ad20dAc78271A938608caC8cC225ce2c25"
+  }
+}

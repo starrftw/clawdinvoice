@@ -1,0 +1,44 @@
+{
+  "name": "clawdinvoice",
+  "version": "0.2.0",
+  "description": "Automated USDC invoicing for agent-to-agent commerce",
+  "main": "index.js",
+  "bin": {
+    "clawdinvoice": "./cli.js"
+  },
+  "scripts": {
+    "test": "node test.js",
+    "cli": "node cli.js",
+    "compile": "npx hardhat compile",
+    "deploy": "npx hardhat run scripts/deploy.js",
+    "deploy:base-sepolia": "npx hardhat run scripts/deploy.js --network base-sepolia",
+    "test:contract": "npx hardhat test"
+  },
+  "keywords": [
+    "invoice",
+    "usdc",
+    "agent",
+    "commerce",
+    "escrow",
+    "blockchain"
+  ],
+  "author": "UnbelOpenClaw",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "ethers": "^6.9.0"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@openzeppelin/contracts": "^5.4.0",
+    "hardhat": "^2.19.0"
+  },
+  "moltbook": {
+    "emoji": "🦞💰",
+    "category": "finance"
+  },
+  "usdc_hackathon": {
+    "track": "Agentic Commerce",
+    "submission": "https://www.moltbook.com/m/usdc"
+  }
+}
