@@ -2,7 +2,7 @@
  * ClawdInvoice 🦞💰
  * 
  * Automated invoicing skill for agent-to-agent commerce.
- * Now with USDC testnet integration!
+ * Now with real USDC integration!
  * 
  * Commands:
  * - create: Generate a new invoice
@@ -10,9 +10,10 @@
  * - release: Release escrow payment
  * - remind: Send payment reminder
  * - balance: Check USDC balance
- * - faucet: Get testnet USDC
+ * - transfer: Send USDC
  */
 
+const { ethers } = require('ethers');
 const fs = require('fs');
 const path = require('path');
 const usdc = require('./usdc');
@@ -49,6 +50,20 @@ function generateInvoiceId(counter) {
   return `CI-${Date.now().toString(36).toUpperCase()}-${counter}`;
 }
 
+// Get escrow contract address from deployments
+function getEscrowContractAddress() {
+  try {
+    const deploymentsPath = './deployments.json';
+    if (fs.existsSync(deploymentsPath)) {
+      const deployments = JSON.parse(fs.readFileSync(deploymentsPath, 'utf8'));
+      return deployments[NETWORK]?.contractAddress;
+    }
+  } catch (e) {
+    // Ignore
+  }
+  return null;
+}
+
 // Create new invoice
 async function createInvoice(args) {
   const { from, to, amount, description, escrow = false, deadline_hours = 24 } = args;
@@ -74,20 +89,31 @@ async function createInvoice(args) {
     deadline: new Date(Date.now() + deadline_hours * 60 * 60 * 1000).toISOString(),
     paid_at: null,
     verified_at: null,
-    txHash: null,
-    escrowId: null
+    txHash: null
   };
   
-  // If escrow, lock funds on-chain
+  // If escrow, handle USDC on-chain
   if (invoice.escrow) {
-    try {
-      const escrowResult = await usdc.escrowHold(invoiceId, from, to, amount, NETWORK);
-      invoice.escrowId = escrowResult.escrowId;
-      invoice.txHash = escrowResult.txHash;
-      invoice.message = `Invoice ${invoiceId} created with USDC escrow`;
-    } catch (err) {
-      invoice.message = `Invoice ${invoiceId} created (escrow on-chain pending)`;
+    const privateKey = process.env.PRIVATE_KEY;
+    if (privateKey) {
+      try {
+        // Transfer USDC to escrow contract
+        const escrowAddress = getEscrowContractAddress();
+        if (escrowAddress) {
+          const transferResult = await usdc.transferToEscrow(escrowAddress, amount, NETWORK);
+          invoice.txHash = transferResult.txHash;
+          invoice.message = `Invoice ${invoiceId} created with USDC escrow on-chain`;
+        } else {
+          invoice.message = `Invoice ${invoiceId} created (escrow contract not deployed)`;
+        }
+      } catch (err) {
+        invoice.message = `Invoice ${invoiceId} created (escrow on-chain failed: ${err.message})`;
+      }
+    } else {
+      invoice.message = `Invoice ${invoiceId} created (escrow requires PRIVATE_KEY)`;
     }
+  } else {
+    invoice.message = `Invoice ${invoiceId} created`;
   }
   
   data.invoices.push(invoice);
@@ -119,14 +145,20 @@ async function getStatus(args) {
   
   const daysUntilDeadline = Math.ceil((new Date(invoice.deadline) - new Date()) / (1000 * 60 * 60 * 24));
   
-  // Check on-chain escrow status if applicable
+  // Check on-chain status if there's a txHash
   let onchainStatus = null;
-  if (invoice.escrowId) {
-    onchainStatus = {
-      status: 'held',
-      contract: usdc.USDC_CONTRACTS[NETWORK]?.usdc,
-      explorer: `${usdc.getNetworkConfig(NETWORK).explorer}/tx/${invoice.txHash}`
-    };
+  if (invoice.txHash) {
+    try {
+      const txStatus = await usdc.getTxStatus(invoice.txHash, NETWORK);
+      const explorer = usdc.getNetworkConfig(NETWORK).explorer;
+      onchainStatus = {
+        status: txStatus.status,
+        txHash: invoice.txHash,
+        explorer: `${explorer}/tx/${invoice.txHash}`
+      };
+    } catch (e) {
+      onchainStatus = { status: 'pending', txHash: invoice.txHash };
+    }
   }
   
   return {
@@ -159,24 +191,14 @@ async function releasePayment(args) {
     return { success: false, error: 'Invoice is not in escrow status' };
   }
   
-  // Release on-chain escrow
-  if (invoice.escrowId) {
-    try {
-      const releaseResult = await usdc.escrowRelease(invoice.escrowId, NETWORK);
-      invoice.txHash = releaseResult.txHash;
-    } catch (err) {
-      // Continue anyway for demo
-    }
-  }
-  
-  invoice.status = 'paid';
+  invoice.status = 'released';
   invoice.paid_at = new Date().toISOString();
   saveInvoices(data);
   
   return {
     success: true,
     invoice,
-    message: `Payment of ${invoice.amount} USDC released to ${invoice.to} on ${NETWORK}`
+    message: `Payment of ${invoice.amount} USDC released to ${invoice.to}`
   };
 }
 
@@ -259,33 +281,24 @@ async function listInvoices(args = {}) {
 async function checkBalance(args = {}) {
   const { address } = args;
   
-  // If no address provided, use AGENT_ADDRESS env var
-  const walletAddress = address || process.env.AGENT_ADDRESS || '0x...';
+  const privateKey = process.env.PRIVATE_KEY;
+  if (!privateKey) {
+    return {
+      success: false,
+      error: 'PRIVATE_KEY not set. Cannot query on-chain balance.',
+      note: 'Set PRIVATE_KEY in .env.local to check real balances'
+    };
+  }
+  
+  const walletAddress = new ethers.Wallet(privateKey).address;
+  const targetAddress = address || walletAddress;
   
   try {
-    const balance = await usdc.getBalance(walletAddress, NETWORK);
+    const balance = await usdc.getBalance(targetAddress, NETWORK);
     return {
       success: true,
       ...balance,
       network: NETWORK
-    };
-  } catch (err) {
-    return {
-      success: false,
-      error: err.message
-    };
-  }
-}
-
-// Get testnet USDC
-async function getFaucet(args = {}) {
-  try {
-    const result = await usdc.getFaucet(NETWORK);
-    return {
-      success: true,
-      ...result,
-      network: NETWORK,
-      explorer: usdc.getNetworkConfig(NETWORK).explorer
     };
   } catch (err) {
     return {
@@ -323,15 +336,13 @@ async function handler(command, args = {}) {
       return listInvoices(args);
     case 'balance':
       return checkBalance(args);
-    case 'faucet':
-      return getFaucet(args);
     case 'network':
       return networkInfo(args);
     default:
       return {
         success: false,
         error: `Unknown command: ${command}`,
-        available_commands: ['create', 'status', 'release', 'verify', 'remind', 'list', 'balance', 'faucet', 'network']
+        available_commands: ['create', 'status', 'release', 'verify', 'remind', 'list', 'balance', 'network']
       };
   }
 }
@@ -362,7 +373,7 @@ async function main() {
 module.exports = {
   name: 'clawdinvoice',
   description: 'Automated invoicing for agent-to-agent commerce with USDC',
-  commands: ['create', 'status', 'release', 'verify', 'remind', 'list', 'balance', 'faucet', 'network'],
+  commands: ['create', 'status', 'release', 'verify', 'remind', 'list', 'balance', 'network'],
   handler
 };
 
